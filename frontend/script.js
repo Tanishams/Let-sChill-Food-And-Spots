@@ -1,7 +1,7 @@
 // =============================================
 //  CONFIG — change this to your backend URL
 // =============================================
-const API_BASE = 'http://localhost:5000/api';
+const API_BASE = '/api';
 const THEME_STORAGE_KEY = 'letschill_theme';
 
 // =============================================
