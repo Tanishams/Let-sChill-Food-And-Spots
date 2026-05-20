@@ -32,7 +32,16 @@ async function apiFetch(endpoint, options = {}) {
         ...(options.headers || {})
     };
     const res = await fetch(API_BASE + endpoint, { ...options, headers });
-    const data = await res.json();
+    const raw = await res.text();
+    let data;
+
+    try {
+        data = raw ? JSON.parse(raw) : {};
+    } catch (error) {
+        if (!res.ok) throw new Error(raw || 'Server returned a non-JSON error response');
+        throw new Error('Server returned an invalid JSON response');
+    }
+
     if (!res.ok) throw new Error(data.message || 'Something went wrong');
     return data;
 }
