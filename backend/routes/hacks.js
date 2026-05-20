@@ -29,8 +29,8 @@ router.get('/trending/week', protect, async (req, res) => {
 
 router.post('/', protect, async (req, res) => {
     try {
-        const { name, time, ingredients, steps, img } = req.body;
-        const hack = await Hack.create({ name, time, ingredients, steps, img, postedBy: req.user._id });
+        const { name, time, timeUnit, ingredients, steps, img } = req.body;
+        const hack = await Hack.create({ name, time, timeUnit, ingredients, steps, img, postedBy: req.user._id });
         await hack.populate('postedBy', 'name profilePic');
         res.status(201).json(hack);
     } catch (error) {
@@ -93,9 +93,10 @@ router.put('/:id', protect, async (req, res) => {
         if (!hack) return res.status(404).json({ message: 'Hack not found' });
         if (hack.postedBy.toString() !== req.user._id.toString()) return res.status(403).json({ message: 'Not authorized' });
         
-        const { name, time, ingredients, steps, img } = req.body;
+        const { name, time, timeUnit, ingredients, steps, img } = req.body;
         hack.name = name || hack.name;
         hack.time = time !== undefined ? time : hack.time;
+        hack.timeUnit = timeUnit || hack.timeUnit;
         hack.ingredients = ingredients !== undefined ? ingredients : hack.ingredients;
         hack.steps = steps !== undefined ? steps : hack.steps;
         hack.img = img || hack.img;

@@ -207,7 +207,13 @@
             <h2 style="font-size: 2.5rem; margin-bottom: 15px;">Add a Hack</h2>
             <form id="add-recipe-form">
                 <input type="text" class="input-field" id="r-name" placeholder="DISH NAME..." required>
-                <input type="number" class="input-field" id="r-time" placeholder="MINUTES..." required>
+                <div class="time-input-row">
+                    <input type="number" class="input-field" id="r-time" placeholder="TIME..." min="1" required>
+                    <select class="input-field time-unit-select" id="r-time-unit" required>
+                        <option value="minutes">Minutes</option>
+                        <option value="hours">Hours</option>
+                    </select>
+                </div>
                 <div style="margin-bottom: 15px;">
                     <label for="r-img" class="btn" id="r-img-label" style="width:100%;">FOOD PIC</label>
                     <input type="file" id="r-img" accept="image/*" style="display:none">
@@ -266,7 +272,13 @@
             <h2 style="font-size: 2.5rem; margin-bottom: 15px;">Edit Hack</h2>
             <form id="edit-hack-form">
                 <input type="text" class="input-field" id="e-hack-name" placeholder="DISH NAME..." required>
-                <input type="number" class="input-field" id="e-hack-time" placeholder="MINUTES..." required>
+                <div class="time-input-row">
+                    <input type="number" class="input-field" id="e-hack-time" placeholder="TIME..." min="1" required>
+                    <select class="input-field time-unit-select" id="e-hack-time-unit" required>
+                        <option value="minutes">Minutes</option>
+                        <option value="hours">Hours</option>
+                    </select>
+                </div>
                 <div style="margin-bottom: 15px;">
                     <label for="e-hack-img" class="btn" id="e-hack-img-label" style="width:100%;"> FOOD PIC (optional)</label>
                     <input type="file" id="e-hack-img" accept="image/*" style="display:none">
@@ -280,6 +292,34 @@
             </form>
         </div>
     </div>
+
+    <button id="chatbot-launcher" class="chatbot-launcher hidden" type="button" onclick="toggleChatbot()" aria-label="Open chatbot">
+        Chat
+    </button>
+
+    <section id="chatbot-widget" class="chatbot-widget hidden" aria-live="polite">
+        <div class="chatbot-header">
+            <div>
+                <h3 class="handwritten chatbot-title">ChillBot</h3>
+                <p class="chatbot-subtitle">Ask for a spot, map link, or cooking help.</p>
+            </div>
+            <button type="button" class="chatbot-close" onclick="toggleChatbot(false)" aria-label="Close chatbot">x</button>
+        </div>
+
+        <div id="chatbot-messages" class="chatbot-messages"></div>
+
+        <div class="chatbot-suggestions">
+            <button type="button" class="chat-suggestion" onclick="askSuggestion('Suggest a chill spot in HSR')">HSR spot</button>
+            <button type="button" class="chat-suggestion" onclick="askSuggestion('Show me an open late spot')">Open late</button>
+            <button type="button" class="chat-suggestion" onclick="askSuggestion('How do I cook something in 10 minutes?')">10 min meal</button>
+            <button type="button" class="chat-suggestion" onclick="askSuggestion('How to fix food that is too spicy?')">Too spicy</button>
+        </div>
+
+        <form id="chatbot-form" class="chatbot-form">
+            <input id="chatbot-input" class="input-field chatbot-input" type="text" placeholder="Ask about spots, maps, or cooking..." autocomplete="off" required>
+            <button type="submit" class="btn chatbot-send">Send</button>
+        </form>
+    </section>
 
     <script src="script.js"></script>
 </body>

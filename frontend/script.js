@@ -19,6 +19,7 @@ let activeView = "explore";
 let currentFilter = null;
 let currentUser = JSON.parse(localStorage.getItem('letschill_user')) || null;
 let currentTheme = localStorage.getItem(THEME_STORAGE_KEY) || 'light';
+let chatbotReady = false;
 
 // =============================================
 //  API HELPER
@@ -67,6 +68,320 @@ function applyTheme(theme) {
 function toggleTheme() {
     applyTheme(currentTheme === 'dark' ? 'light' : 'dark');
     notify(currentTheme === 'dark' ? 'Dark mode activated 🌙' : 'Light mode activated ☀️');
+}
+
+function escapeHtml(text) {
+    return String(text || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function normalizeText(text) {
+    return String(text || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function tokenize(text) {
+    return normalizeText(text).split(' ').filter(token => token.length > 2);
+}
+
+function buildGoogleMapsLink(spot) {
+    return `https://www.google.com/maps/search/${encodeURIComponent(`${spot.name} ${spot.area} Bangalore`)}`;
+}
+
+function appendChatMessage(role, content, asHtml = false) {
+    const container = document.getElementById('chatbot-messages');
+    if (!container) return;
+
+    const bubble = document.createElement('div');
+    bubble.className = `chat-message ${role}`;
+    if (asHtml) bubble.innerHTML = content;
+    else bubble.textContent = content;
+
+    container.appendChild(bubble);
+    container.scrollTop = container.scrollHeight;
+}
+
+function initChatbot() {
+    if (chatbotReady) return;
+    chatbotReady = true;
+    appendChatMessage(
+        'bot',
+        `Hey! I can help with:<br>• recommending chill spots<br>• giving Google Maps links for places<br>• answering quick cooking doubts<br><br>Try asking “Suggest a study-friendly spot” or “How do I fix salty food?”`,
+        true
+    );
+}
+
+function toggleChatbot(force) {
+    const widget = document.getElementById('chatbot-widget');
+    const launcher = document.getElementById('chatbot-launcher');
+    if (!widget || !launcher) return;
+
+    const shouldOpen = typeof force === 'boolean' ? force : widget.classList.contains('hidden');
+    widget.classList.toggle('hidden', !shouldOpen);
+    launcher.classList.toggle('hidden', shouldOpen);
+
+    if (shouldOpen) {
+        initChatbot();
+        const input = document.getElementById('chatbot-input');
+        if (input) input.focus();
+    }
+}
+
+function askSuggestion(question) {
+    toggleChatbot(true);
+    const input = document.getElementById('chatbot-input');
+    if (input) input.value = question;
+    handleChatbotQuestion(question);
+}
+
+async function ensureChatbotData(type) {
+    try {
+        if ((type === 'spots' || type === 'both') && spots.length === 0) {
+            spots = await apiFetch('/spots');
+        }
+        if ((type === 'hacks' || type === 'both') && hacks.length === 0) {
+            hacks = await apiFetch('/hacks');
+        }
+    } catch (err) {
+        console.log('Chatbot data load skipped:', err.message);
+    }
+}
+
+function getRequestedBudget(question) {
+    const match = normalizeText(question).match(/(?:under|below|less than|within)\s+(\d{2,5})/);
+    return match ? Number(match[1]) : null;
+}
+
+function getRequestedMinutes(question) {
+    const match = normalizeText(question).match(/(\d{1,3})\s*(?:min|mins|minute|minutes)/);
+    return match ? Number(match[1]) : null;
+}
+
+function getHackDurationInMinutes(hack) {
+    const amount = Number(hack?.time) || 0;
+    return (hack?.timeUnit || 'minutes') === 'hours' ? amount * 60 : amount;
+}
+
+function formatHackDuration(hack) {
+    const amount = Number(hack?.time) || 0;
+    const unit = hack?.timeUnit || 'minutes';
+    if (unit === 'hours') {
+        return `${amount} ${amount === 1 ? 'HR' : 'HRS'}`;
+    }
+    return `${amount} ${amount === 1 ? 'MIN' : 'MINS'}`;
+}
+
+function isSpotQuestion(question) {
+    const q = normalizeText(question);
+    const spotKeywords = ['spot', 'spots', 'place', 'places', 'cafe', 'hangout', 'study', 'date', 'late', 'budget', 'cheap', 'map', 'location', 'where', 'directions'];
+    return spotKeywords.some(keyword => q.includes(keyword));
+}
+
+function isCookingQuestion(question) {
+    const q = normalizeText(question);
+    const cookingKeywords = ['cook', 'cooking', 'kitchen', 'hack', 'recipe', 'food', 'meal', 'maggi', 'noodles', 'rice', 'egg', 'pasta', 'spicy', 'salty', 'bland', 'burnt', 'burned', 'watery', 'dry', 'boil', 'fry'];
+    return cookingKeywords.some(keyword => q.includes(keyword));
+}
+
+function scoreSpotForQuestion(spot, question) {
+    const q = normalizeText(question);
+    const spotName = normalizeText(spot.name);
+    const area = normalizeText(spot.area);
+    const desc = normalizeText(spot.desc || '');
+    const tokens = tokenize(question);
+    let score = 0;
+
+    if (q.includes(spotName)) score += 40;
+    if (spotName.includes(q) && q.length > 4) score += 18;
+    if (q.includes(area)) score += 20;
+    if (q.includes('open late') || q.includes('late night') || q.includes('late')) score += spot.isOpenLate ? 16 : -4;
+    if (q.includes('study')) score += spot.isStudyFriendly ? 16 : -4;
+    if (q.includes('date')) score += spot.isDateSpot ? 16 : -4;
+    if (q.includes('cheap') || q.includes('budget')) {
+        const budget = parseBudgetRange(spot.budget);
+        if (budget && budget.min <= 300) score += 10;
+    }
+
+    const requestedBudget = getRequestedBudget(question);
+    if (requestedBudget) {
+        const budget = parseBudgetRange(spot.budget);
+        if (budget) {
+            if (budget.min <= requestedBudget) score += 12;
+            if (budget.max > requestedBudget * 1.5) score -= 6;
+        }
+    }
+
+    tokens.forEach(token => {
+        if (spotName.includes(token)) score += 8;
+        if (area.includes(token)) score += 7;
+        if (desc.includes(token)) score += 3;
+    });
+
+    return score;
+}
+
+function getSpotReason(spot, question) {
+    const q = normalizeText(question);
+    if ((q.includes('open late') || q.includes('late')) && spot.isOpenLate) return 'Good for late-night plans.';
+    if (q.includes('study') && spot.isStudyFriendly) return 'Looks study-friendly.';
+    if (q.includes('date') && spot.isDateSpot) return 'Nice for a date vibe.';
+    if (q.includes(normalizeText(spot.area))) return `Matches your ${spot.area} area request.`;
+    const budget = parseBudgetRange(spot.budget);
+    if ((q.includes('cheap') || q.includes('budget')) && budget && budget.min <= 300) return 'Fits a lower-budget outing.';
+    return 'Could be a solid match from the current spots list.';
+}
+
+function buildSpotReply(question) {
+    if (spots.length === 0) {
+        return `I couldn't read the spots list yet. Open the Spots page once, then ask again for a recommendation or map link.`;
+    }
+
+    const q = normalizeText(question);
+    const ranked = spots
+        .map(spot => ({ spot, score: scoreSpotForQuestion(spot, question) }))
+        .sort((a, b) => b.score - a.score);
+
+    const directMatch = ranked.find(entry => entry.score >= 35);
+    const wantsMap = ['map', 'location', 'where', 'directions'].some(word => q.includes(word));
+
+    if (directMatch && wantsMap) {
+        const spot = directMatch.spot;
+        return `Try <strong>${escapeHtml(spot.name)}</strong> in ${escapeHtml(spot.area)}.<br>${escapeHtml(getSpotReason(spot, question))}<br>Budget: ${escapeHtml(spot.budget || 'Not listed')}<br><a href="${buildGoogleMapsLink(spot)}" target="_blank" rel="noopener noreferrer">Open in Google Maps</a>`;
+    }
+
+    const bestMatches = ranked.filter(entry => entry.score > 0).slice(0, 3).map(entry => entry.spot);
+    const fallbackMatches = bestMatches.length > 0 ? bestMatches : spots.slice(0, 3);
+
+    return `Here are a few spots you can try:<br><br>${fallbackMatches.map(spot =>
+        `<strong>${escapeHtml(spot.name)}</strong> — ${escapeHtml(spot.area)}<br>${escapeHtml(getSpotReason(spot, question))}<br>Budget: ${escapeHtml(spot.budget || 'Not listed')}<br><a href="${buildGoogleMapsLink(spot)}" target="_blank" rel="noopener noreferrer">Open in Google Maps</a>`
+    ).join('<br><br>')}`;
+}
+
+function getCookingTip(question) {
+    const q = normalizeText(question);
+
+    if (q.includes('spicy')) {
+        return 'If food is too spicy, balance it with curd, cream, butter, coconut milk, or a little extra starch like rice or bread.';
+    }
+    if (q.includes('salty')) {
+        return 'If it is too salty, add more base ingredients, a splash of water, or pair it with unsalted rice, pasta, or potatoes.';
+    }
+    if (q.includes('bland')) {
+        return 'If it tastes bland, try salt first, then acid like lemon, and finally a little crunch or spice for contrast.';
+    }
+    if (q.includes('burnt') || q.includes('burned')) {
+        return 'If something is slightly burnt, move the unburnt top layer to a new pan immediately and do not scrape the bottom.';
+    }
+    if (q.includes('watery') || q.includes('thin')) {
+        return 'If a sauce or curry is watery, simmer it uncovered for a few more minutes so extra water can reduce.';
+    }
+    if (q.includes('dry')) {
+        return 'If food feels too dry, add a little warm water, broth, butter, or oil in small amounts and mix gently.';
+    }
+    if (q.includes('maggi') || q.includes('noodles')) {
+        return 'For better noodles, keep the water just enough to coat the masala, add the tastemaker late, and finish with butter or cheese for extra body.';
+    }
+
+    return '';
+}
+
+function findMatchingHacks(question) {
+    const q = normalizeText(question);
+    const tokens = tokenize(question);
+    const requestedMinutes = getRequestedMinutes(question);
+
+    return hacks
+        .map(hack => {
+            const name = normalizeText(hack.name);
+            const ingredients = normalizeText(hack.ingredients || '');
+            const steps = normalizeText(hack.steps || '');
+            let score = 0;
+
+            if (q.includes(name)) score += 35;
+            tokens.forEach(token => {
+                if (name.includes(token)) score += 8;
+                if (ingredients.includes(token)) score += 4;
+                if (steps.includes(token)) score += 2;
+            });
+
+            if (requestedMinutes && getHackDurationInMinutes(hack) <= requestedMinutes) score += 10;
+            if ((q.includes('quick') || q.includes('easy') || q.includes('fast')) && getHackDurationInMinutes(hack) <= 15) score += 8;
+
+            return { hack, score };
+        })
+        .filter(entry => entry.score > 0)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 3)
+        .map(entry => entry.hack);
+}
+
+function openHackFromChat(id) {
+    toggleChatbot(false);
+    viewRecipe(id);
+}
+
+function buildCookingReply(question) {
+    const tip = getCookingTip(question);
+    const matches = findMatchingHacks(question);
+
+    if (tip && matches.length === 0) {
+        return `${escapeHtml(tip)}<br><br>If you want, ask me for a quick recipe too, like “What can I cook in 10 minutes?”`;
+    }
+
+    if (matches.length > 0) {
+        const intro = tip ? `${escapeHtml(tip)}<br><br>Also, these hacks from your app may help:<br><br>` : `These hacks from your app may help:<br><br>`;
+        return intro + matches.map(hack =>
+            `<strong>${escapeHtml(hack.name)}</strong> — ${escapeHtml(formatHackDuration(hack))}<br>${escapeHtml((hack.ingredients || '').slice(0, 100))}${(hack.ingredients || '').length > 100 ? '...' : ''}<br><button type="button" class="chat-inline-action" onclick="openHackFromChat('${hack._id}')">View Recipe</button>`
+        ).join('<br><br>');
+    }
+
+    if (tip) return escapeHtml(tip);
+
+    return `I can help with quick cooking doubts like food being too spicy, salty, bland, watery, or dry. You can also ask for fast recipe ideas such as “What can I cook in 10 minutes?”`;
+}
+
+async function generateChatbotReply(question) {
+    if (!currentUser) {
+        return 'Please log in first so I can access your spots and hacks.';
+    }
+
+    if (isSpotQuestion(question)) {
+        await ensureChatbotData('spots');
+        return buildSpotReply(question);
+    }
+
+    if (isCookingQuestion(question)) {
+        await ensureChatbotData('hacks');
+        return buildCookingReply(question);
+    }
+
+    await ensureChatbotData('both');
+
+    if (spots.length > 0 && hacks.length > 0) {
+        return `I can do two things right now: recommend a chill spot with a Google Maps link, or help with cooking doubts and quick recipe ideas.`;
+    }
+
+    return `Ask me something like “Show me a study-friendly spot”, “Where is a good date spot?”, or “How do I fix watery curry?”`;
+}
+
+async function handleChatbotQuestion(question) {
+    const trimmed = String(question || '').trim();
+    if (!trimmed) return;
+
+    appendChatMessage('user', trimmed);
+
+    const input = document.getElementById('chatbot-input');
+    if (input) input.value = '';
+
+    const reply = await generateChatbotReply(trimmed);
+    appendChatMessage('bot', reply, true);
 }
 
 // =============================================
@@ -133,6 +448,8 @@ document.getElementById('signup-form').onsubmit = async (e) => {
 function enterApp() {
     document.getElementById('auth-view').classList.add('hidden');
     document.getElementById('app-layout').classList.remove('hidden');
+    document.getElementById('chatbot-launcher').classList.remove('hidden');
+    document.getElementById('chatbot-widget').classList.add('hidden');
     // Fill profile fields
     document.getElementById('profile-name-input').value = currentUser.name || '';
     document.getElementById('profile-email-input').value = currentUser.email || '';
@@ -156,6 +473,8 @@ function logout() {
     document.getElementById('signup-error').classList.add('hidden');
     document.getElementById('app-layout').classList.add('hidden');
     document.getElementById('auth-view').classList.remove('hidden');
+    document.getElementById('chatbot-launcher').classList.add('hidden');
+    document.getElementById('chatbot-widget').classList.add('hidden');
     notify("Stay Chill! 👋");
 }
 
@@ -196,6 +515,12 @@ document.getElementById('profile-pic-input').onchange = (e) => {
         };
         reader.readAsDataURL(e.target.files[0]);
     }
+};
+
+document.getElementById('chatbot-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const input = document.getElementById('chatbot-input');
+    await handleChatbotQuestion(input.value);
 };
 
 // =============================================
@@ -351,7 +676,7 @@ function renderCook() {
             <div class="bookmark-btn ${isSaved ? 'active' : ''}" onclick="toggleWishlist(event, '${h._id}')">
                 ${isSaved ? '❤️' : '🤍'}
             </div>
-            <div class="sticker" style="background:var(--secondary); color:white;">${h.time} MINS</div>
+            <div class="sticker" style="background:var(--secondary); color:white;">${formatHackDuration(h)}</div>
             ${isOwner ? `<div style="position: absolute; top: 50px; right: 10px; display: flex; gap: 8px;">
                 <button class="btn btn-small" style="padding: 4px 8px; font-size: 0.8rem; background: #fff3cd;" onclick="event.stopPropagation(); openEditModal('hack', '${h._id}')">✏️ EDIT</button>
                 <button class="btn btn-small" style="padding: 4px 8px; font-size: 0.8rem; background: #f8d7da;" onclick="event.stopPropagation(); deletePost('hack', '${h._id}')">🗑️ DELETE</button>
@@ -507,6 +832,7 @@ function openEditModal(type, id) {
         if (!hack) return;
         document.getElementById('e-hack-name').value = hack.name;
         document.getElementById('e-hack-time').value = hack.time;
+        document.getElementById('e-hack-time-unit').value = hack.timeUnit || 'minutes';
         document.getElementById('e-hack-ingredients').value = hack.ingredients;
         document.getElementById('e-hack-steps').value = hack.steps;
         openModal('edit-hack-modal');
@@ -613,6 +939,7 @@ document.getElementById('add-recipe-form').onsubmit = async (e) => {
             body: JSON.stringify({
                 name: document.getElementById('r-name').value,
                 time: document.getElementById('r-time').value,
+                timeUnit: document.getElementById('r-time-unit').value,
                 ingredients: document.getElementById('r-ingredients').value,
                 steps: document.getElementById('r-steps').value,
                 img: tempImgs.r || "https://images.unsplash.com/photo-1473093226795-af9932fe5856?auto=format&fit=crop&w=800&q=80"
@@ -667,6 +994,7 @@ document.getElementById('edit-hack-form').onsubmit = async (e) => {
             body: JSON.stringify({
                 name: document.getElementById('e-hack-name').value,
                 time: document.getElementById('e-hack-time').value,
+                timeUnit: document.getElementById('e-hack-time-unit').value,
                 ingredients: document.getElementById('e-hack-ingredients').value,
                 steps: document.getElementById('e-hack-steps').value,
                 img: tempImgs.r || undefined
